@@ -1,3 +1,5 @@
+from unittest.mock import call
+
 import telebot
 from telebot import types
 import sqlite3 as sl
@@ -7,7 +9,7 @@ bot = telebot.TeleBot('6481776262:AAEIJnxer7PHF41X8U6iS8kqYWZNsHkc6lI')
 con = sl.connect('support_service.db', check_same_thread=False)
 cur = con.cursor()
 
-cur.execute("""CREATE TABLE IF NOT EXISTS user(
+cur.execute("""CREATE TABLE IF NOT EXISTS users(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     first_name TEXT,
     last_name TEXT
@@ -18,7 +20,7 @@ cur.execute("""CREATE TABLE IF NOT EXISTS phones(
     user_id INTEGER,
     phone TEXT,
     type INT,
-    FOREIGN KEY(user_id) REFERENCES user(id),
+    FOREIGN KEY(user_id) REFERENCES users(id),
     FOREIGN KEY(type) REFERENCES phone_types(id)
     )""")
 cur.execute("""CREATE TABLE IF NOT EXISTS phone_types(
@@ -57,16 +59,16 @@ def delete_user_by_id(id):
 
 
 def update_first_name_in_base(id, fn):
-    cur.execute("UPDATE users SET first name=? WHERE id=?", (fn.lower(), id))
+    cur.execute("UPDATE users SET first_name=? WHERE id=?", (fn.lower(), id))
 
 
 def update_last_name_in_base(id, ln):
-    cur.execute("UPDATE users SET first name=? WHERE id=?", (ln.lower(), id))
+    cur.execute("UPDATE users SET last_name=? WHERE id=?", (ln.lower(), id))
 
 
-def add_number_to_base(contact_id, new_number, type_s):
+def add_number_to_base(contact_id, new_number, type):
     cur.execute("""INSERT OR IGNORE INTO phones (user_id, phone, type) VALUES (?, ?, ?)""",
-                (contact_id, new_number, type_s))
+                (contact_id, new_number, type))
     return
 
 
@@ -87,13 +89,14 @@ def get_users():
 
 def search_contact_by_query(que):
     str_que = "%" + que.lower() + "%"
-    cur.execute("SELECT user.id FROM phones  FULL JOIN users ON phones.user_id = user.id WHERE phones.phone LIKE ? OR "
-                "user.first_name LIKE ? OR users.last_name LIKE ? GROUP BY user.id", (str_que, str_que, str_que))
+    cur.execute("SELECT users.id FROM phones FULL JOIN users ON phones.user_id = users.id WHERE phones.phone LIKE ? OR "
+                "users.first_name LIKE ? OR users.last_name LIKE ? GROUP BY users.id", (str_que, str_que, str_que))
     return cur.fetchall()
 
 
 '''
 # Добавления человека в базу данных
+
 @bot.message_handler(commands=['start'])
 def start(message):
     connect = sl.connect('users.db')
@@ -151,6 +154,15 @@ def start_message(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_worker(call):
+    global contact_id
+    global ph_type
+    call_str = call.data.split('|')
+    if len(call_str) > 0:
+        action = call_str[0]
+    if len(call_str) > 1:
+        user_id = call_str[1]
+    if len(call_str) > 2:
+        phone_type = call_str[2]
     if call.data == 'main_menu':
         keyboard = types.InlineKeyboardMarkup()
         key_reg = types.InlineKeyboardButton(text='CisArt', callback_data='cis_art')
@@ -260,17 +272,14 @@ def callback_worker(call):
         help_keyboard.add(key_search)
         key_add = types.InlineKeyboardButton(text='Add_contact', callback_data='add_contact')
         help_keyboard.add(key_add)
-        key_delete = types.InlineKeyboardButton(text='Delete_contact', callback_data='delete_contact')
-        help_keyboard.add(key_delete)
-        key_edit = types.InlineKeyboardButton(text='Edit_contact', callback_data='edit_contact')
-        help_keyboard.add(key_edit)
+        key_add_number = types.InlineKeyboardButton(text='Добавить номер', callback_data='choose_type_number')
+        help_keyboard.add(key_add_number)
 
         bot.send_message(call.message.chat.id,
                          text='1. Чтобы найти нужный контакт, необходимо нажать на кнопку "Search_contact" и ввести '
                               'имя или номер телефона\n2. Для добавления контакта нужно нажать на кнопку "Add_contact"'
-                              ' и ввести необходимые данные\n3. Для обновления контакта нужно его найти и '
-                              'нажать на кнопку "Edit_contact"\n4. Чтобы удалить контакт нужно его найти и в меню '
-                              'контакта нажать на кнопку "Delete_contact"',
+                              ' и ввести необходимые данные\n3. Чтобы посмотреть журнал контактов: нужно нажать '
+                              'на кнопку "Watch_contacts"',
                          reply_markup=help_keyboard)
     elif call.data == 'add_contact':
         help_keyboard = types.InlineKeyboardMarkup()
@@ -279,12 +288,93 @@ def callback_worker(call):
         bot.send_message(call.message.chat.id, text="Введите имя:")
         bot.register_next_step_handler(call.message, get_user_first_name)
 
+    elif call.data == 'watch_contacts':
+        help_keyboard = types.InlineKeyboardMarkup()
+        key_start = types.InlineKeyboardButton(text='Справочная меню', callback_data='phone_menu')
+        help_keyboard.add(key_start)
+        users = get_users()
+        users_keyboard = types.InlineKeyboardMarkup()
+        for i in users:
+            user_info = get_user_by_id(i[0])
+            text = user_info[0][2].title() + ' ' + user_info[0][1].title()
+            key_user = types.InlineKeyboardButton(text, callback_data='get_user|' + str(i[0]))
+            users_keyboard.add(key_user)
+        bot.send_message(call.message.chat.id, "Контакты: ", reply_markup=users_keyboard)
+        if call.data == 'choose_type_number':
+            users_keyboard = types.InlineKeyboardMarkup()
+            for id in phone_types:
+                key_type = types.InlineKeyboardButton(phone_types.get(id),
+                                                      callback_data='add_number|' + str(user_id) + '|' + str(id))
+                users_keyboard.add(key_type)
+            bot.send_message(call.message.chat.id, "Выберите тип номера: ", reply_markup=users_keyboard)
+        elif call.data == 'add_number':
+            contact_id = user_id
+            ph_type = phone_type
+            bot.send_message(call.message.chat.id, text="Введите номер: ")
+            bot.register_next_step_handler(call.message, ask_number_to_add)
+
+    elif call.data == 'search_contact':
+        bot.send_message(call.message.chat.id, text="Введите номер, имя или фамилию:")
+        bot.register_next_step_handler(call.message, search_contact)
+
+    elif call.data == 'choose_type_number':
+        help_keyboards = types.InlineKeyboardMarkup()
+        for id in phone_types:
+            key_type = types.InlineKeyboardButton(phone_types.get(id),
+                                                  callback_data='add_number|' + str(user_id) + '|' + str(id))
+            help_keyboards.add(key_type)
+        bot.send_message(call.message.chat.id, "Выберите тип номера: ", reply_markup=help_keyboards)
+
+    elif call.data == 'add_number':
+        contact_id = user_id
+        ph_type = phone_type
+        bot.send_message(call.message.chat.id, text="Введите номер: ")
+        bot.register_next_step_handler(call.message, ask_number_to_add)
+
+    elif call.data == "delete_contact":
+        delete_user_by_id(user_id)
+        delete_keyboard = types.InlineKeyboardMarkup()
+        key_main = types.InlineKeyboardButton(text='Вернуться в главное меню', callback_data='main_menu')
+        delete_keyboard.add(key_main)
+        bot.send_message(call.message.chat.id, text="Контакт удален", reply_markup=delete_keyboard)
+
+    elif call.data == "choose_number_to_delete":
+        user_numbers = get_numbers_by_user_id(user_id)
+        numbers_keyboard = types.InlineKeyboardMarkup()
+        for number in user_numbers:
+            key_number = types.InlineKeyboardButton(number[2],
+                                                    callback_data='delete_number|' + str(user_id) + '|' + str(
+                                                        number[0]))
+            numbers_keyboard.add(key_number)
+        bot.send_message(call.message.chat.id, "Выберите номер, который хотите удалить: ",
+                         reply_markup=numbers_keyboard)
+
+    elif call.data == "delete_number":
+        contact_id = user_id
+        ph_type = phone_type
+        delete_number_from_base(phone_type)
+        user_menu(contact_id, call.message.chat.id)
+        contact_id = 0
+
+    elif call.data == "get_user":
+        user_menu(user_id, call.message.chat.id)
+
 
 def get_user_first_name(message):
     global fn
     fn = message.text
     bot.send_message(message.chat.id, text="Введите фамилию:")
     bot.register_next_step_handler(message, get_user_last_name)
+
+
+def ask_number_to_add(message):
+    global contact_id
+    global ph_type
+    new_number = message.text
+    add_number_to_base(contact_id, new_number, ph_type)
+    user_menu(contact_id, message.chat.id)
+    contact_id = 0
+    ph_type = 0
 
 
 def get_user_last_name(message):
@@ -295,9 +385,12 @@ def get_user_last_name(message):
 
 
 def user_menu(user_id, chat_id):
+    global contact_id
+    global ph_type
     global phone_types
     user_info = get_user_by_id(user_id)
     user_numbers = get_numbers_by_user_id(user_id)
+
     user_keyboard = types.InlineKeyboardMarkup()
     key_add = types.InlineKeyboardButton(text='Добавить номер', callback_data='choose_type_number|' + str(user_id))
     user_keyboard.add(key_add)
@@ -319,6 +412,7 @@ def user_menu(user_id, chat_id):
     user_keyboard.add(key_delete_user)
     key_main_menu = types.InlineKeyboardButton(text='Вернуться в главное меню', callback_data='main_menu')
     user_keyboard.add(key_main_menu)
+    # Добавить данные:
     if len(user_numbers) > 0:
         phones = '\n\nТелефоны:'
         for i in user_numbers:
@@ -330,6 +424,28 @@ def user_menu(user_id, chat_id):
         user_info[0][2].title()) + phones
 
     bot.send_message(chat_id, text, reply_markup=user_keyboard)
+
+
+def search_contact(message):
+    query = message.text
+    user_id = search_contact_by_query(query)
+
+    if len(user_id) > 0:
+        if len(user_id) == 1:
+            user_menu(user_id[0][0], message.chat.id)
+        elif len(user_id) > 1:
+            users_keyboard = types.InlineKeyboardMarkup()
+            for i in user_id:
+                user_info = get_user_by_id(i[0])
+                text = user_info[0][2].title() + ' ' + user_info[0][1].title()
+                key_user = types.InlineKeyboardButton(text, callback_data='get_user|' + str(i[0]))
+                users_keyboard.add(key_user)
+            bot.send_message(message.chat.id, "Найдены пользователи: ", reply_markup=users_keyboard)
+    else:
+        user_keyboard = types.InlineKeyboardMarkup()
+        key_main_menu = types.InlineKeyboardButton(text='Вернуться в главное меню', callback_data='main_menu')
+        user_keyboard.add(key_main_menu)
+        bot.send_message(message.chat.id, "Контакты или номера не найдены.", reply_markup=user_keyboard)
 
 
 bot.polling(none_stop=True)
